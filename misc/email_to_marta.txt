@@ -1,0 +1,34 @@
+To: [MARTA developer services / API support address]
+Subject: Rail real-time arrivals API: DELAY, LATITUDE and LONGITUDE fields no longer returned
+
+Hello,
+
+I'm a student using the MARTA Rail Data API for a project I'm doing at KSU that maps live train positions. I wanted to ask about a change I noticed in the response this morning.
+
+Until last night, each record contained 13 fields:
+
+  DESTINATION, DIRECTION, EVENT_TIME, IS_REALTIME, LINE, NEXT_ARR, STATION,
+  TRAIN_ID, WAITING_SECONDS, WAITING_TIME, DELAY, LATITUDE, LONGITUDE
+
+My last successful response with all 13 fields had an EVENT_TIME of 10/27/2026 10:37 PM.
+As of this morning (10/28/2026, around 9:15 AM), every record returns only 10 fields. DELAY,
+LATITUDE and LONGITUDE are gone. I checked all records in the response, and I searched
+the raw response text in both XML and JSON formats, but none of the three fields appears anywhere.
+
+I also noticed a second change at the same time: a request with no Accept header used to
+return JSON and now returns XML (content-type: application/xml). Sending
+"Accept: application/json" returns JSON again, but still with only the 10 fields.
+
+The request itself has not changed:
+
+  GET https://developerservices.itsmarta.com:18096/itsmarta/railrealtimearrivals/developerservices/traindata
+  with my apiKey as a query parameter
+
+Was the removal of DELAY, LATITUDE and LONGITUDE intentional, or is it a temporary issue that will be corrected?
+
+Thank you for your time and for providing the data. I'm happy to share more detail about
+what I'm seeing if that would help.
+
+Best regards,
+Macsen Higgins
+[Your email]

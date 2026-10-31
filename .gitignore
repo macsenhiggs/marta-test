@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.RData
+.DS_Store
+renv/library/
+renv/staging/
+
+# Source data for build_assets.R; update locally. Not needed to run the app or collector,
+# except MARTA_stops.csv, which the app reads at startup.
+assets/input/*
+!assets/input/google_transit/
+assets/input/google_transit/*
+!assets/input/google_transit/MARTA_stops.csv

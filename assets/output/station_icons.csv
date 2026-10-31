@@ -1,0 +1,39 @@
+station,lines,icon
+Airport Station,GOLD/RED,station_gold-red.svg
+Arts Center Station,GOLD/RED,station_gold-red.svg
+Ashby Station,BLUE/GREEN,station_blue-green.svg
+Avondale Station,BLUE,station_blue.svg
+Bankhead Station,GREEN,station_green.svg
+Brookhaven Station,GOLD,station_gold.svg
+Buckhead Station,RED,station_red.svg
+Chamblee Station,GOLD,station_gold.svg
+Civic Center Station,GOLD/RED,station_gold-red.svg
+College Park Station,GOLD/RED,station_gold-red.svg
+Decatur Station,BLUE,station_blue.svg
+Doraville Station,GOLD,station_gold.svg
+Dunwoody Station,RED,station_red.svg
+East Lake Station,BLUE,station_blue.svg
+East Point Station,GOLD/RED,station_gold-red.svg
+Edgewood Candler Park Station,BLUE/GREEN,station_blue-green.svg
+Five Points Station,BLUE/GOLD/GREEN/RED,station_blue-gold-green-red.svg
+Garnett Station,GOLD/RED,station_gold-red.svg
+Georgia State Station,BLUE/GREEN,station_blue-green.svg
+Hamilton E Holmes Station,BLUE,station_blue.svg
+Indian Creek Station,BLUE,station_blue.svg
+Inman Park Station,BLUE/GREEN,station_blue-green.svg
+Kensington Station,BLUE,station_blue.svg
+King Memorial Station,BLUE/GREEN,station_blue-green.svg
+Lakewood Station,GOLD/RED,station_gold-red.svg
+Lenox Station,GOLD,station_gold.svg
+Lindbergh Station,GOLD/RED,station_gold-red.svg
+Medical Center Station,RED,station_red.svg
+Midtown Station,GOLD/RED,station_gold-red.svg
+North Ave Station,GOLD/RED,station_gold-red.svg
+North Springs Station,RED,station_red.svg
+Oakland City Station,GOLD/RED,station_gold-red.svg
+Omni Dome Station,BLUE/GREEN,station_blue-green.svg
+Peachtree Center Station,GOLD/RED,station_gold-red.svg
+Sandy Springs Station,RED,station_red.svg
+Vine City Station,BLUE/GREEN,station_blue-green.svg
+West End Station,GOLD/RED,station_gold-red.svg
+West Lake Station,BLUE,station_blue.svg

@@ -1,0 +1,65 @@
+Core idea: when you are at a train station, what shows up on the board?
+- you are at [   ] station
+- upcoming trains:
+  - [   ] line heading [N/E/S/W] to [   ] - X mins away
+  - [   ] line heading [N/E/S/W] to [   ] - X mins away
+
+How can we replicate this experience as the data that each station holds?
+
+embedded descriptions?
+
+for instance:
+
+{
+  name = "airport station"
+  lat = 82.341
+  lon = 40.221
+  arriving_trains = {
+      {
+          line = red
+          destination = north springs
+          minute_wait = 3
+          minute_delay = 0
+      },
+      {
+        line = yellow
+        destination = doraville
+        minute_wait = 8
+        minute_delay = 2
+      }
+    }
+}
+
+master DF with DF of arriving trains for each station in an "arrivals" cell? 
+If we do that, how do we pull the right data to display on-click (not hover) for the leaflets?
+
+--- EARMARKED: toggling layers on/off (not implemented yet) ---
+Plan: use leaflet's built-in layers control (checkbox panel on the map).
+
+How to implement, in reference_app.R:
+1. Every layer you want toggleable needs a `group =` value.
+   - trains:   already group = "trains"   (addMarkers in the refresh observe)
+   - stations: already group = "stations" (addCircleMarkers in renderLeaflet)
+   - rail lines: not grouped yet -> add group = "rail lines" to the addPolylines() call
+2. In renderLeaflet, add to the map chain (e.g. after the layers are added):
+     addLayersControl(
+       overlayGroups = c("rail lines", "stations", "trains"),
+       options = layersControlOptions(collapsed = FALSE)
+     )
+   The names in overlayGroups are the labels shown in the panel and must match the
+   group = values exactly.
+
+Things to check when it's added:
+- Refresh behavior: each refresh runs clearGroup("trains") and re-adds the markers. Hiding a
+  group is not the same as clearing it, so a hidden trains group should stay hidden through
+  refreshes. Believed correct but untested; verify first.
+- The station popup updater (update_boards JS) looks layers up directly, so it should keep
+  working while the stations group is hidden. Also untested.
+- Order/stacking: groups drawn later sit on top. Currently lines, then stations, then trains.
+
+Alternative if we ever want our own toggle UI instead of the built-in panel:
+   checkboxInput("show_trains", "Show trains", TRUE) in the ui, then in the server:
+   observeEvent(input$show_trains, {
+     proxy <- leafletProxy("map")
+     if (input$show_trains) showGroup(proxy, "trains") else hideGroup(proxy, "trains")
+   })

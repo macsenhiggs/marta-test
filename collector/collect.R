@@ -26,16 +26,21 @@ get_trains <- function() {
     )
 }
 
-# Keep what the summaries need (delay, trains run, wait time by line / station / time).
-# Scheduled rows have no train_id or delay, so only live rows are stored.
-snapshot <- get_trains() |>
-  filter(is_realtime) |>
-  transmute(
-    collected_at = Sys.time(),
-    line, station, direction, destination, train_id,
-    waiting_seconds,
-    delay_seconds = delay
-  )
+# The feed has one row per upcoming station per train, so a train's line, direction, destination
+# and delay repeat on every one of its rows. Store them once (train_polls) and keep only what
+# differs per station in train_arrivals. Scheduled rows have no train_id or delay, so only live rows are stored.
+live <- get_trains() |>
+  filter(is_realtime, !is.na(train_id), train_id != "") |>
+  mutate(collected_at = Sys.time())
+
+train_polls <- live |>
+  distinct(collected_at, train_id, .keep_all = TRUE) |>
+  transmute(collected_at, train_id, line, direction, destination,
+            delay_seconds = as.integer(delay))
+
+train_arrivals <- live |>
+  distinct(collected_at, train_id, station, .keep_all = TRUE) |>
+  transmute(collected_at, train_id, station, waiting_seconds = as.integer(waiting_seconds))
 
 # RPostgres doesn't take a URL, so split DATABASE_URL into its parts
 u <- httr::parse_url(Sys.getenv("DATABASE_URL"))
@@ -47,21 +52,36 @@ con <- dbConnect(
 )
 on.exit(dbDisconnect(con))
 
-if (!dbExistsTable(con, "train_snapshots")) {
+if (!dbExistsTable(con, "train_polls")) {
   dbExecute(con, "
-    create table train_snapshots (
-      collected_at    timestamptz not null,
-      line            text,
-      station         text,
-      direction       text,
-      destination     text,
-      train_id        text,
-      waiting_seconds integer,
-      delay_seconds   integer
+    create table train_polls (
+      collected_at  timestamptz not null,
+      train_id      text        not null,
+      line          text,
+      direction     text,
+      destination   text,
+      delay_seconds integer,
+      primary key (collected_at, train_id)
     )")
-  dbExecute(con, "create index on train_snapshots (collected_at)")
-  dbExecute(con, "create index on train_snapshots (line, station, collected_at)")
+  dbExecute(con, "create index on train_polls (line, collected_at)")
+}
+if (!dbExistsTable(con, "train_arrivals")) {
+  dbExecute(con, "
+    create table train_arrivals (
+      collected_at    timestamptz not null,
+      train_id        text        not null,
+      station         text        not null,
+      waiting_seconds integer,
+      primary key (collected_at, train_id, station),
+      foreign key (collected_at, train_id) references train_polls (collected_at, train_id)
+    )")
+  dbExecute(con, "create index on train_arrivals (station, collected_at)")
 }
 
-dbAppendTable(con, "train_snapshots", snapshot)
-cat("Stored", nrow(snapshot), "rows at", format(Sys.time(), tz = "UTC", usetz = TRUE), "\n")
+# Both inserts or neither, so the tables can't drift out of sync
+dbWithTransaction(con, {
+  dbAppendTable(con, "train_polls", train_polls)
+  dbAppendTable(con, "train_arrivals", train_arrivals)
+})
+cat("Stored", nrow(train_polls), "trains and", nrow(train_arrivals), "arrivals at",
+    format(Sys.time(), tz = "UTC", usetz = TRUE), "\n")

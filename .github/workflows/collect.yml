@@ -2,7 +2,7 @@ name: collect-train-data
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # every 15 minutes (GitHub may delay or skip runs)
+    - cron: "7,22,37,52 * * * *"   # every 15 minutes, off the :00/:15/:30/:45 marks where GitHub is busiest
   workflow_dispatch:          # lets you run it by hand from the Actions tab
 
 jobs:

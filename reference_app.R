@@ -1,7 +1,9 @@
-# REFERENCE ONLY: example of a live train map. Not your app; use it as a guide.
-# Assumes the feed has latitude/longitude columns (unverified; check names(trains)).
+# ------------------------------------------------------------------------------
+# Setup
+# ------------------------------------------------------------------------------
 
 library(shiny)
+library(DBI)
 library(leaflet)
 library(leaflet.extras)   # for addResetMapButton()
 library(httr)
@@ -15,6 +17,12 @@ library(lubridate)
 rail_lines <- read_sf("assets/output/rail_lines.shp")
 
 REFRESH_SECS <- 5
+
+
+
+# ------------------------------------------------------------------------------
+# Live train feed
+# ------------------------------------------------------------------------------
 
 get_trains <- function() {
   response <- GET(
@@ -40,6 +48,12 @@ get_trains <- function() {
     )
 }
 
+
+
+# ------------------------------------------------------------------------------
+# Stations
+# ------------------------------------------------------------------------------
+
 # Station dictionary: names match the real-time feed (park & ride rows are dropped by the STATION filter)
 stations <- read_csv("assets/input/google_transit/MARTA_stops.csv", show_col_types = FALSE) |>
   filter(str_detect(stop_name, "STATION")) |>
@@ -50,6 +64,12 @@ trains_per_direction <- 3   # how many upcoming trains each direction shows on a
 
 # Compare feed destinations to station names ("Hamilton E. Holmes" vs "Hamilton E Holmes Station")
 norm_name <- function(x) x |> str_to_lower() |> str_remove(" station$") |> str_remove_all("[^a-z0-9]")
+
+
+
+# ------------------------------------------------------------------------------
+# Station boards
+# ------------------------------------------------------------------------------
 
 # One row per station, with its upcoming trains nested in `arrivals` and the board as popup HTML
 build_station_boards <- function(trains) {
@@ -69,6 +89,7 @@ build_station_boards <- function(trains) {
     mutate(popup = map2_chr(station, arrivals, board_html))
 }
 
+
 # Note appended to a train's arrival time; empty when the train is on time or has no delay figure
 waiting_note <- function(waiting_minutes, delay_minutes) {
   case_when(
@@ -78,6 +99,7 @@ waiting_note <- function(waiting_minutes, delay_minutes) {
     TRUE                                      ~ paste0(waiting_minutes, " min away (delayed ", delay_minutes, " min)")
   )
 }
+
 
 # What the station "board" shows, as the HTML for a click popup
 board_html <- function(station, arrivals) {
@@ -103,12 +125,19 @@ board_html <- function(station, arrivals) {
   paste0("<h3 class='board-title'>", str_to_title(station), "</h3>", paste(blocks, collapse = ""))
 }
 
+
 # Every station with its current board (stations with no trains get a placeholder)
 station_popups <- function(boards) {
   stations |>
     left_join(select(boards, station, popup), by = "station") |>
     mutate(popup = coalesce(popup, paste0("<b>", str_to_title(station), "</b><br/>No upcoming trains")))
 }
+
+
+
+# ------------------------------------------------------------------------------
+# Map assets: train arrows and the in-place popup updater
+# ------------------------------------------------------------------------------
 
 # Serve the rotated arrows to the browser, one icon per direction
 addResourcePath("arrows", "assets/output/arrows")
@@ -119,6 +148,7 @@ arrow_icons <- iconList(
   S = makeIcon("arrows/arrow_S.svg", iconWidth = arrow_size, iconHeight = arrow_size),
   W = makeIcon("arrows/arrow_W.svg", iconWidth = arrow_size, iconHeight = arrow_size)
 )
+
 
 # Updates the content of each station's popup in place, so an open board refreshes without closing
 update_boards_js <- "
@@ -133,6 +163,119 @@ Shiny.addCustomMessageHandler('update_boards', function(msg) {
 });
 "
 
+
+
+# ------------------------------------------------------------------------------
+# Analytics: summaries of the polls the collector stores in the Neon database
+# ------------------------------------------------------------------------------
+
+# Connection to the Neon database the collector writes to (RPostgres doesn't take a URL, so split it)
+db_connect <- function() {
+  u <- httr::parse_url(Sys.getenv("DATABASE_URL"))
+  dbConnect(
+    RPostgres::Postgres(),
+    host = u$hostname, port = u$port %||% 5432, dbname = u$path,
+    user = u$username, password = u$password, sslmode = "require"
+  )
+}
+
+
+# Time filter choices: label shown in the app = value used ("all" = no filter, otherwise a Postgres interval)
+gap_windows <- c("All time" = "all", "Last 30 days" = "30 days", "Last 7 days" = "7 days", "Last 24 hours" = "24 hours")
+
+
+# SQL condition limiting `col` to one of gap_windows ("true" when unfiltered)
+time_condition <- function(window, col) {
+  window <- match.arg(window, gap_windows)   # only these intervals are ever pasted into the SQL
+  if (window == "all") "true" else sprintf("%s >= now() - interval '%s'", col, window)
+}
+
+
+# Average time between consecutive trains, grouped by "line" or "station", over one of gap_windows.
+# Within each poll, a station's upcoming trains (per line and direction) are sorted by wait time and
+# the gap to the previous train is taken; those gaps are then averaged.
+avg_gap_by <- function(group_by = c("line", "station"), window = "all") {
+  group_by <- match.arg(group_by)        # only these names are ever pasted into the SQL
+  con <- db_connect()
+  on.exit(dbDisconnect(con))
+  dbGetQuery(con, sprintf("
+    with gaps as (
+      select p.line, a.station,
+             a.waiting_seconds - lag(a.waiting_seconds) over (
+               partition by a.collected_at, a.station, p.line, p.direction
+               order by a.waiting_seconds) as gap_seconds
+      from train_arrivals a
+      join train_polls p using (collected_at, train_id)
+      where %s
+    )
+    select %s as grp, (avg(gap_seconds) / 60.0)::float8 as avg_gap_minutes, count(gap_seconds) as n
+    from gaps
+    where gap_seconds is not null
+    group by 1
+    order by 2", time_condition(window, "a.collected_at"), group_by))
+}
+
+
+# Average delay in minutes (negative = early), grouped by "line" or "station", over one of gap_windows.
+# By line, each train counts once per poll; by station, each train counts once for every station it is
+# heading to, so a station's figure is the delay of the trains arriving there.
+avg_delay_by <- function(group_by = c("line", "station"), window = "all") {
+  group_by <- match.arg(group_by)
+  con <- db_connect()
+  on.exit(dbDisconnect(con))
+  sql <- if (group_by == "line") {
+    sprintf("
+      select p.line as grp, (avg(p.delay_seconds) / 60.0)::float8 as avg_delay_minutes, count(p.delay_seconds) as n
+      from train_polls p
+      where p.delay_seconds is not null and %s
+      group by 1
+      order by 2", time_condition(window, "p.collected_at"))
+  } else {
+    sprintf("
+      select a.station as grp, (avg(p.delay_seconds) / 60.0)::float8 as avg_delay_minutes, count(p.delay_seconds) as n
+      from train_arrivals a
+      join train_polls p using (collected_at, train_id)
+      where p.delay_seconds is not null and %s
+      group by 1
+      order by 2", time_condition(window, "a.collected_at"))
+  }
+  dbGetQuery(con, sql)
+}
+
+
+# Standard line colours for the bar chart
+line_colors <- c(Red = "#d32f2f", Gold = "#c9a227", Green = "#2e7d32", Blue = "#1565c0")
+
+
+# Bar chart of `value` (a column name) by `grp`, shared by every analytics chart.
+# By line: vertical bars in the line colours. By station: horizontal bars in `station_fill`.
+summary_bar_chart <- function(df, value, group_by, y_label, station_fill) {
+  df <- df |> mutate(grp = str_remove(grp, " Station$"), grp = fct_reorder(grp, .data[[value]]))
+  base <- labs(x = NULL, y = y_label)
+  if (group_by == "line") {
+    ggplot(df, aes(grp, .data[[value]], fill = grp)) +
+      geom_col(show.legend = FALSE) +
+      scale_fill_manual(values = line_colors) +
+      base + theme_minimal(base_size = 14)
+  } else {
+    # Many stations, so horizontal bars (and a taller plot, see chart_height)
+    ggplot(df, aes(grp, .data[[value]])) +
+      geom_col(fill = station_fill) +
+      coord_flip() +
+      base + theme_minimal(base_size = 14)
+  }
+}
+
+
+# Plot height in pixels: stations need much more room than the four lines
+chart_height <- function(group_by) if (identical(group_by, "station")) 900 else 350
+
+
+
+# ------------------------------------------------------------------------------
+# Styling
+# ------------------------------------------------------------------------------
+
 # Station board styling; em units keep every size relative to the popup's own text size
 board_css <- "
 .board-title { font-size: 1.4em; margin: 0 0 0.5em 0; }
@@ -143,19 +286,66 @@ board_css <- "
 .board-arriving { font-weight: bold; color: #2e7d32; }
 "
 
+
+# Page layout styling: the map sits in a bordered card, with the analytics section below it
+page_css <- "
+.map-card { border: 1px solid #d0d0d0; border-radius: 0.5em; overflow: hidden; }
+.analytics-card { border: 1px solid #d0d0d0; border-radius: 0.5em; padding: 1.5em; margin: 1em 0; }
+"
+
+
+
+# ------------------------------------------------------------------------------
+# UI
+# ------------------------------------------------------------------------------
+
 ui <- fluidPage(
-  tags$head(tags$script(HTML(update_boards_js)), tags$style(HTML(board_css))),
-  leafletOutput("map", height = "100vh")
+  tags$head(
+    tags$script(HTML(update_boards_js)),
+    tags$style(HTML(board_css)),
+    tags$style(HTML(page_css))
+  ),
+
+  titlePanel(
+    title = "MARTA Live Rail Map",
+    windowTitle = "MARTA Live Rail Map"
+  ),
+  p("Live train positions and station arrival boards, refreshed every few seconds. Click a station for its board."),
+
+  div(class = "map-card", leafletOutput("map", height = "70vh")),
+
+  div(
+    class = "analytics-card",
+    h4("Train performance"),
+    # Shared by both charts
+    fluidRow(
+      column(3, selectInput("chart_group", "Group by", choices = c("Line" = "line", "Station" = "station"), width = "100%")),
+      column(3, selectInput("chart_window", "Time period", choices = gap_windows, selected = "all", width = "100%"))
+    ),
+    fluidRow(
+      column(6, h5("Average time between trains"), plotOutput("gap_plot", height = "auto")),
+      column(6, h5("Average delay"), plotOutput("delay_plot", height = "auto"))
+    )
+  )
 )
 
+
+
+# ------------------------------------------------------------------------------
+# Server
+# ------------------------------------------------------------------------------
+
 server <- function(input, output, session) {
+
+  # --- Live data: refetched every REFRESH_SECS ---
   trains <- reactive({
     invalidateLater(REFRESH_SECS * 1000)
     get_trains()
   })
   boards <- reactive(build_station_boards(trains()))
 
-  # Draw the base map and the stations once; the stations never get redrawn
+
+  # --- Map: base layers and stations, drawn once (stations never get redrawn) ---
   output$map <- renderLeaflet({
     leaflet(options = leafletOptions(zoomSnap = 0.1, wheelPxPerZoomLevel = 60)) |>   # allow fractional zoom so fitBounds can fit tightly
       addProviderTiles(providers$Stadia.AlidadeSmooth) |>
@@ -185,7 +375,8 @@ server <- function(input, output, session) {
       addResetMapButton()   # button under +/- that returns to the initial view
   })
 
-  # Each refresh: replace only the train arrows
+
+  # --- Map: train arrows, replaced each refresh ---
   observe({
     # Update Console message
     time <- round_date(Sys.time(), unit = "second")
@@ -214,11 +405,41 @@ server <- function(input, output, session) {
       )
   })
 
-  # Each refresh: push the new board text into the station popups
+
+  # --- Map: station boards, pushed into the popups each refresh ---
   observe({
     popups <- station_popups(boards())
     session$sendCustomMessage("update_boards", as.list(setNames(popups$popup, popups$station)))
   })
+
+
+  # --- Analytics: both charts follow the shared "Group by" and "Time period" menus ---
+  gap_data <- reactive(avg_gap_by(input$chart_group, input$chart_window))
+  delay_data <- reactive(avg_delay_by(input$chart_group, input$chart_window))
+
+  output$gap_plot <- renderPlot(
+    {
+      df <- gap_data()
+      shiny::validate(need(nrow(df) > 0, "No stored train data in this time period."))   # jsonlite also has a validate()
+      summary_bar_chart(df, "avg_gap_minutes", input$chart_group, "Average minutes between trains", "#4a6fa5")
+    },
+    height = function() chart_height(input$chart_group)
+  )
+
+  output$delay_plot <- renderPlot(
+    {
+      df <- delay_data()
+      shiny::validate(need(nrow(df) > 0, "No stored train data in this time period."))
+      summary_bar_chart(df, "avg_delay_minutes", input$chart_group, "Average delay (minutes; negative = early)", "#b5651d")
+    },
+    height = function() chart_height(input$chart_group)
+  )
 }
+
+
+
+# ------------------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------------------
 
 shinyApp(ui, server)
